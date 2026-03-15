@@ -19,7 +19,12 @@ function load() {
 }
 
 function save(data) {
-  fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+  try {
+    fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+  } catch (err) {
+    // Vercel's filesystem is read-only — writes fail silently in production.
+    console.warn('[db] Could not persist data:', err.message);
+  }
 }
 
 const db = {
