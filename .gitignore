@@ -5,3 +5,4 @@ server/data.db
 server/data.json
 dist/
 .DS_Store
+.claude/
