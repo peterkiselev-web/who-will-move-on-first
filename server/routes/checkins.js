@@ -32,7 +32,6 @@ function calcEntryScore(entry) {
 
 function calcStreak(entries) {
   if (!entries.length) return 0;
-  // Use UTC dates consistently (same as how dates are stored)
   const dates = new Set(entries.map(e => e.date));
   const todayUTC = new Date().toISOString().split('T')[0];
   let streak = 0;
@@ -58,78 +57,93 @@ function calcStats(entries) {
 }
 
 // POST /api/checkins — submit today's check-in
-router.post('/', authMiddleware, (req, res) => {
-  const { feeling, went_on_date, ex_thoughts, social_life, glow_up, diary_note } = req.body;
-  const today = new Date().toISOString().split('T')[0];
+router.post('/', authMiddleware, async (req, res) => {
+  try {
+    const { feeling, went_on_date, ex_thoughts, social_life, glow_up, diary_note } = req.body;
+    const today = new Date().toISOString().split('T')[0];
 
-  const existing = db.getByUserDate(req.user.username, today);
+    const existing = await db.getByUserDate(req.user.username, today);
 
-  if (existing) {
-    db.update(req.user.username, today, {
-      feeling,
-      went_on_date: went_on_date ? 1 : 0,
-      ex_thoughts,
-      social_life,
-      glow_up,
-      diary_note: diary_note || null,
-    });
-  } else {
-    db.insert({
-      user: req.user.username,
-      date: today,
-      feeling,
-      went_on_date: went_on_date ? 1 : 0,
-      ex_thoughts,
-      social_life,
-      glow_up,
-      diary_note: diary_note || null,
-    });
+    if (existing) {
+      await db.update(req.user.username, today, {
+        feeling,
+        went_on_date: went_on_date ? 1 : 0,
+        ex_thoughts,
+        social_life,
+        glow_up,
+        diary_note: diary_note || null,
+      });
+    } else {
+      await db.insert({
+        user: req.user.username,
+        date: today,
+        feeling,
+        went_on_date: went_on_date ? 1 : 0,
+        ex_thoughts,
+        social_life,
+        glow_up,
+        diary_note: diary_note || null,
+      });
+    }
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[checkins POST]', err);
+    res.status(500).json({ error: 'Database error', detail: err.message });
   }
-
-  res.json({ success: true });
 });
 
 // GET /api/checkins/today
-router.get('/today', authMiddleware, (req, res) => {
-  const today = new Date().toISOString().split('T')[0];
-  res.json(db.getByUserDate(req.user.username, today));
+router.get('/today', authMiddleware, async (req, res) => {
+  try {
+    const today = new Date().toISOString().split('T')[0];
+    res.json(await db.getByUserDate(req.user.username, today));
+  } catch (err) {
+    console.error('[checkins GET /today]', err);
+    res.status(500).json({ error: 'Database error', detail: err.message });
+  }
 });
 
 // GET /api/checkins/dashboard
-router.get('/dashboard', authMiddleware, (req, res) => {
-  const all = db.getAll();
-  const peter = all.filter(e => e.user === 'peter');
-  const niloufar = all.filter(e => e.user === 'niloufar');
+router.get('/dashboard', authMiddleware, async (req, res) => {
+  try {
+    const all = await db.getAll();
+    const peter = all.filter(e => e.user === 'peter');
+    const niloufar = all.filter(e => e.user === 'niloufar');
 
-  const avgScore = (entries) => {
-    if (!entries.length) return 0;
-    return Math.round(entries.map(calcEntryScore).reduce((a, b) => a + b, 0) / entries.length);
-  };
+    const avgScore = (entries) => {
+      if (!entries.length) return 0;
+      return Math.round(entries.map(calcEntryScore).reduce((a, b) => a + b, 0) / entries.length);
+    };
 
-  const recentNotes = (entries) =>
-    entries.filter(e => e.diary_note).slice(0, 3).map(e => ({ date: e.date, note: e.diary_note }));
+    const recentNotes = (entries) =>
+      entries.filter(e => e.diary_note).slice(0, 3).map(e => ({ date: e.date, note: e.diary_note }));
 
-  const today = new Date().toISOString().split('T')[0];
-  const checkedInToday = all.some(e => e.user === req.user.username && e.date === today);
+    const today = new Date().toISOString().split('T')[0];
+    const checkedInToday = all.some(e => e.user === req.user.username && e.date === today);
 
-  res.json({
-    peter: {
-      score: avgScore(peter),
-      streak: calcStreak(peter),
-      stats: calcStats(peter),
-      recentNotes: recentNotes(peter),
-      totalEntries: peter.length,
-    },
-    niloufar: {
-      score: avgScore(niloufar),
-      streak: calcStreak(niloufar),
-      stats: calcStats(niloufar),
-      recentNotes: recentNotes(niloufar),
-      totalEntries: niloufar.length,
-    },
-    currentUser: req.user.username,
-    checkedInToday,
-  });
+    res.json({
+      peter: {
+        score: avgScore(peter),
+        streak: calcStreak(peter),
+        stats: calcStats(peter),
+        recentNotes: recentNotes(peter),
+        totalEntries: peter.length,
+      },
+      niloufar: {
+        score: avgScore(niloufar),
+        streak: calcStreak(niloufar),
+        stats: calcStats(niloufar),
+        recentNotes: recentNotes(niloufar),
+        totalEntries: niloufar.length,
+      },
+      currentUser: req.user.username,
+      checkedInToday,
+    });
+  } catch (err) {
+    console.error('[checkins GET /dashboard]', err);
+    res.status(500).json({ error: 'Database error', detail: err.message });
+  }
 });
 
 module.exports = router;

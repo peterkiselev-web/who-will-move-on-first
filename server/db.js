@@ -1,61 +1,63 @@
 /**
- * Pure-JS JSON file store — no native compilation needed.
- * Stores all check-in data in server/data.json
+ * Supabase (PostgreSQL) database client.
+ * Replaces the old JSON file store — all methods are now async.
  */
-const fs = require('fs');
-const path = require('path');
+const { createClient } = require('@supabase/supabase-js');
 
-const DATA_FILE = path.join(__dirname, 'data.json');
-
-function load() {
-  try {
-    if (fs.existsSync(DATA_FILE)) {
-      return JSON.parse(fs.readFileSync(DATA_FILE, 'utf-8'));
-    }
-  } catch {
-    // corrupt file — start fresh
-  }
-  return { check_ins: [], nextId: 1 };
+if (!process.env.SUPABASE_URL || !process.env.SUPABASE_ANON_KEY) {
+  console.warn('[db] SUPABASE_URL / SUPABASE_ANON_KEY not set — database calls will fail.');
 }
 
-function save(data) {
-  try {
-    fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
-  } catch (err) {
-    // Vercel's filesystem is read-only — writes fail silently in production.
-    console.warn('[db] Could not persist data:', err.message);
-  }
-}
+const supabase = createClient(
+  process.env.SUPABASE_URL || '',
+  process.env.SUPABASE_ANON_KEY || ''
+);
 
 const db = {
   /** Get all check-ins, newest first */
-  getAll() {
-    return load().check_ins.slice().sort((a, b) => b.date.localeCompare(a.date));
+  async getAll() {
+    const { data, error } = await supabase
+      .from('check_ins')
+      .select('*')
+      .order('date', { ascending: false });
+    if (error) throw error;
+    return data || [];
   },
 
-  /** Get one check-in by user + date */
-  getByUserDate(user, date) {
-    const { check_ins } = load();
-    return check_ins.find(e => e.user === user && e.date === date) || null;
+  /** Get one check-in by user + date (returns null if not found) */
+  async getByUserDate(user, date) {
+    const { data, error } = await supabase
+      .from('check_ins')
+      .select('*')
+      .eq('user', user)
+      .eq('date', date)
+      .maybeSingle();
+    if (error) throw error;
+    return data || null;
   },
 
   /** Insert a new check-in */
-  insert(record) {
-    const data = load();
-    const entry = { id: data.nextId++, ...record, created_at: new Date().toISOString() };
-    data.check_ins.push(entry);
-    save(data);
-    return entry;
+  async insert(record) {
+    const { data, error } = await supabase
+      .from('check_ins')
+      .insert({ ...record, created_at: new Date().toISOString() })
+      .select()
+      .single();
+    if (error) throw error;
+    return data;
   },
 
   /** Update an existing check-in by user + date */
-  update(user, date, fields) {
-    const data = load();
-    const idx = data.check_ins.findIndex(e => e.user === user && e.date === date);
-    if (idx === -1) return null;
-    data.check_ins[idx] = { ...data.check_ins[idx], ...fields, created_at: new Date().toISOString() };
-    save(data);
-    return data.check_ins[idx];
+  async update(user, date, fields) {
+    const { data, error } = await supabase
+      .from('check_ins')
+      .update({ ...fields, created_at: new Date().toISOString() })
+      .eq('user', user)
+      .eq('date', date)
+      .select()
+      .single();
+    if (error) throw error;
+    return data;
   },
 };
 
