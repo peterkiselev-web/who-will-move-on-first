@@ -3,8 +3,12 @@
  * Connects using the POSTGRES_URL connection string automatically
  * injected by Vercel's Supabase integration.
  *
- * SSL is ALWAYS enabled — Supabase requires it and Vercel does not
- * reliably set NODE_ENV=production on serverless functions.
+ * IMPORTANT: We intentionally parse the URL into individual params instead
+ * of passing connectionString directly. When pg receives a connection string
+ * that contains "?sslmode=require", it builds its own SSL config from that
+ * param and ignores our ssl:{} object — which causes the
+ * "SELF_SIGNED_CERT_IN_CHAIN" error on Vercel. Passing individual params
+ * gives us full, unambiguous control over the SSL settings.
  */
 const { Pool } = require('pg');
 
@@ -12,54 +16,56 @@ const POSTGRES_URL = process.env.POSTGRES_URL;
 
 if (!POSTGRES_URL) {
   console.error('[db] FATAL: POSTGRES_URL environment variable is not set.');
-} else {
-  // Log the host only (never log credentials)
-  try {
-    const { hostname, port } = new URL(POSTGRES_URL);
-    console.log(`[db] Connecting to PostgreSQL host: ${hostname}:${port || 5432}`);
-  } catch {
-    console.warn('[db] Could not parse POSTGRES_URL to log host.');
-  }
 }
 
-const pool = new Pool({
-  connectionString: POSTGRES_URL,
-  // Always enable SSL — Supabase requires it regardless of environment.
-  // rejectUnauthorized:false is needed because Vercel's outbound TLS
-  // chain doesn't always include Supabase's CA cert.
-  ssl: { rejectUnauthorized: false },
-  // Keep connections short-lived — safer for serverless cold starts.
-  idleTimeoutMillis: 10_000,
-  connectionTimeoutMillis: 10_000,
-});
+// Parse the connection URL into discrete parts so pg never reads sslmode
+// from the query string and our ssl config is always authoritative.
+let poolConfig;
+try {
+  const u = new URL(POSTGRES_URL || 'postgresql://localhost/dev');
+  poolConfig = {
+    host:     u.hostname,
+    port:     parseInt(u.port, 10) || 5432,
+    database: u.pathname.replace(/^\//, ''),
+    user:     decodeURIComponent(u.username),
+    password: decodeURIComponent(u.password),
+    // rejectUnauthorized:false bypasses Supabase's self-signed CA cert —
+    // the connection is still encrypted, we just skip chain verification.
+    ssl: { rejectUnauthorized: false },
+    idleTimeoutMillis:    10_000,
+    connectionTimeoutMillis: 10_000,
+  };
+  console.log(`[db] Connecting to PostgreSQL: ${u.hostname}:${poolConfig.port}/${poolConfig.database}`);
+} catch (err) {
+  console.error('[db] Failed to parse POSTGRES_URL:', err.message);
+  poolConfig = {};
+}
 
-// Log pool-level errors so they appear in Vercel function logs
+const pool = new Pool(poolConfig);
+
+// Surface pool-level errors in Vercel function logs
 pool.on('error', (err) => {
-  console.error('[db] Unexpected pool error:', err.message, err.stack);
+  console.error('[db] Unexpected pool error:', err.message, err.code);
 });
 
-// Verify the connection is reachable on startup (non-fatal — just logs)
+// Verify connectivity on startup (non-fatal — just logs)
 pool.query('SELECT 1').then(() => {
   console.log('[db] PostgreSQL connection verified OK.');
 }).catch((err) => {
-  console.error('[db] PostgreSQL connection test FAILED:', err.message, {
-    code: err.code,
-    detail: err.detail,
-    hint: err.hint,
-  });
+  console.error('[db] Connection test FAILED:', err.message, { code: err.code });
 });
 
-/** Thin query wrapper that logs errors with full context before re-throwing */
+/** Query wrapper — logs full error context before re-throwing */
 async function query(sql, params) {
   try {
     return await pool.query(sql, params);
   } catch (err) {
     console.error('[db] Query error:', {
       message: err.message,
-      code: err.code,
-      detail: err.detail,
-      hint: err.hint,
-      sql: sql.replace(/\s+/g, ' ').trim(),
+      code:    err.code,
+      detail:  err.detail,
+      hint:    err.hint,
+      sql:     sql.replace(/\s+/g, ' ').trim(),
     });
     throw err;
   }
